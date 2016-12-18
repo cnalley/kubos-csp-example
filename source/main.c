@@ -32,6 +32,8 @@
 #include <csp/drivers/usart.h>
 #include <csp/interfaces/csp_if_kiss.h>
 
+#include "types.h"
+
 /**
 * Enabling this example code requires certain configuration values to be present
 * in the configuration json of this application. An example is given below:
@@ -55,8 +57,6 @@
 #define TARGET_ADDRESS YOTTA_CFG_CSP_TARGET_ADDRESS
 #define MY_PORT    YOTTA_CFG_CSP_PORT
 #define BLINK_MS 100
-
-static xQueueHandle button_queue;
 
 /* kiss interfaces */
 static csp_iface_t csp_if_kiss;
@@ -147,13 +147,27 @@ void csp_client(void *p) {
 #endif
     }
 
+    telemetry_packet dummy_packet = { .data.i = 0, .timestamp = 0, \
+        .source.subsystem_id = 0x1,                                \
+        .source.data_type = TELEMETRY_TYPE_INT,                    \
+        .source.source_id = 0x1};   
+
+    int runcount = 0;
+
     /**
      * Try data packet to server
      */
     while (1) {
-        status = xQueueReceive(button_queue, &signal, portMAX_DELAY);
-        if (status != pdTRUE) {
-            continue;
+        
+        /* Alternate between two different dummy payloads */ 
+        runcount++;
+        if(runcount%2 == 0){
+            dummy_packet.data.i = 333;
+            dummy_packet.timestamp = 444;
+        }
+        else {
+            dummy_packet.data.i = 111;
+            dummy_packet.timestamp = 222;
         }
 
         /* Get packet buffer for data */
@@ -173,40 +187,32 @@ void csp_client(void *p) {
         }
 
         /* Copy dummy data to packet */
-        char *msg = "Hello World";
-        strcpy((char *) packet->data, msg);
+        memcpy(packet->data, &dummy_packet, sizeof(telemetry_packet));
 
         /* Set packet length */
-        packet->length = strlen(msg);
+        packet->length = sizeof(telemetry_packet);
 
         /* Send packet */
         if (!csp_send(conn, packet, 100)) {
+            
             /* Send failed */
+            blink(K_LED_RED);
             csp_buffer_free(packet);
         }
         /* success */
-        blink(K_LED_RED);
+        blink(K_LED_GREEN);
         /* Close connection */
         csp_close(conn);
+        
+        runcount++;
+        
+        if(runcount == 2147483000)
+        runcount = 0;
+
+        csp_sleep_ms(1000);
     }
 }
 
-void task_button_press(void *p) {
-   int signal = 1;
-
-    while (1) {
-        if (k_gpio_read(K_BUTTON_0)) {
-            while (k_gpio_read(K_BUTTON_0))
-                vTaskDelay(50 / portTICK_RATE_MS); /* Button Debounce Delay */
-            while (!k_gpio_read(K_BUTTON_0))
-                vTaskDelay(50 / portTICK_RATE_MS); /* Button Debounce Delay */
-
-            blink(K_LED_RED);
-            xQueueSendToBack(button_queue, &signal, 0); /* Send Message */
-        }
-        vTaskDelay(100 / portTICK_RATE_MS);
-    }
-}
 
 int main(void)
 {
@@ -231,8 +237,6 @@ int main(void)
 
     P2OUT = BIT1;
     #endif
-
-    button_queue = xQueueCreate(10, sizeof(int));
 
     struct usart_conf conf;
 
@@ -259,7 +263,6 @@ int main(void)
 
     xTaskCreate(csp_server, "CSPSRV", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
     xTaskCreate(csp_client, "CSPCLI", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
-    xTaskCreate(task_button_press, "BUTTON", configMINIMAL_STACK_SIZE, NULL, 3, NULL);
 
     vTaskStartScheduler();
 
